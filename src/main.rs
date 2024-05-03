@@ -46,6 +46,9 @@ enum Expr {
         arr: Box<Expr>,
         index: Box<Expr>,
     },
+    Call(Box<Expr>, Arr),
+    
+    TypeOf(Ident),
 
     Neg(Box<Expr>),
     Ref(Box<Expr>),
@@ -141,9 +144,14 @@ fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .separated_by(just(','));
 
         let atom = number
+            .or(text::keyword("type")
+                .then(ident.clone()
+                    .delimited_by(just('('), just(')')))
+                .map(|(_, ident)| Expr::TypeOf(ident))
+                .labelled("type() builtin"))
             .or(expr.clone()
                 .delimited_by(just('('), just(')')))
-            .or(inner_list
+            .or(inner_list.clone()
                 .delimited_by(just('['), just(']'))
                 .map(|v| Expr::Array(v)))
             .or(ident.clone()
@@ -167,11 +175,17 @@ fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 .delimited_by(just('['), just(']'))
                 .repeated())
             .foldl(|a, index| Expr::ArrIndex { arr: Box::new(a), index: Box::new(index) });
+        
+        let call = arr_index
+            .then(inner_list
+                .delimited_by(just('('), just(')'))
+                .repeated())
+            .foldl(|a, args| Expr::Call(Box::new(a), args));
 
         let unary = op('-').to(Expr::Neg as fn(_) -> _)
             .or(op('&').to(Expr::Ref as fn(_) -> _))
             .repeated()
-            .then(arr_index)
+            .then(call)
             .foldr(|op, old| op(Box::new(old)));
 
         let product = unary.clone()

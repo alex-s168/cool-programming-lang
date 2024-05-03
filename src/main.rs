@@ -47,7 +47,7 @@ enum Expr {
         index: Box<Expr>,
     },
     Call(Box<Expr>, Arr),
-    
+
     TypeOf(Ident),
 
     Neg(Box<Expr>),
@@ -110,17 +110,21 @@ fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 just("0o").to(Base::OCT),])
             .then_with(move |base: Base| int_semi(base.radix as u32)
                 .map(move |s: String| u64::from_str_radix(s.as_str(), base.radix as u32).unwrap() as f64)
-            );
+            )
+            .labelled("int");
 
         let float = int_semi(10)
             .separated_by(just('.'))
             .at_least(1)
             .at_most(2)
             .map(|s: Vec<String>| s.join("."))
-            .map(|s: String| s.parse().unwrap());
+            .map(|s: String| s.parse().unwrap())
+            .labelled("float");
 
-        let number = int.or(float).padded()
-            .map(|v| Expr::Num(v));
+        let number = int.or(float)
+            .padded()
+            .map(|v| Expr::Num(v))
+            .labelled("number");
 
         let var = ident.clone()
             .map(|v| Expr::Var(v));
@@ -143,42 +147,58 @@ fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .padded()
             .separated_by(just(','));
 
-        let atom = number
-            .or(text::keyword("type")
-                .then(ident.clone()
-                    .delimited_by(just('('), just(')')))
-                .map(|(_, ident)| Expr::TypeOf(ident))
-                .labelled("type() builtin"))
-            .or(expr.clone()
-                .delimited_by(just('('), just(')')))
-            .or(inner_list.clone()
-                .delimited_by(just('['), just(']'))
-                .map(|v| Expr::Array(v)))
-            .or(ident.clone()
-                .padded()
-                .then(initializer_list
-                    .delimited_by(just('{'), just('}')))
-                .map(|(name,init)| Expr::Struct(name, init)))
-            .or(var)
-            .padded();
+        let atom =
+            choice::<_, Simple<char>>([
+                number.boxed(),
+
+                text::keyword("type")
+                    .then(ident.clone()
+                        .delimited_by(just('('), just(')')))
+                    .map(|(_, ident)| Expr::TypeOf(ident))
+                    .labelled("type() builtin")
+                    .boxed(),
+
+                expr.clone()
+                    .delimited_by(just('('), just(')'))
+                    .boxed(),
+
+                inner_list.clone()
+                    .delimited_by(just('['), just(']'))
+                    .map(|v| Expr::Array(v))
+                    .labelled("array initialization")
+                    .boxed(),
+
+                ident.clone()
+                    .padded()
+                    .then(initializer_list
+                        .delimited_by(just('{'), just('}')))
+                    .map(|(name,init)| Expr::Struct(name, init))
+                    .labelled("struct initialization")
+                    .boxed(),
+
+                var.boxed(),
+            ]).padded();
 
         let op = |c| just(c).padded();
 
         let member_ref = atom
             .then(op('.')
                 .then(text::ident::<_, Simple<char>>())
+                .labelled("member access")
                 .repeated())
             .foldl(|a, (_, b)| Expr::MemberRef(Box::new(a), b));
 
         let arr_index = member_ref
             .then(expr.clone()
                 .delimited_by(just('['), just(']'))
+                .labelled("array index")
                 .repeated())
             .foldl(|a, index| Expr::ArrIndex { arr: Box::new(a), index: Box::new(index) });
-        
+
         let call = arr_index
             .then(inner_list
                 .delimited_by(just('('), just(')'))
+                .labelled("function call")
                 .repeated())
             .foldl(|a, args| Expr::Call(Box::new(a), args));
 
@@ -216,5 +236,5 @@ fn main() {
             std::process::exit(1);
         });
 
-    println!("{:?}", parser().parse(src));
+    println!("{:?}", parser().parse_recovery(src));
 }

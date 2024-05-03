@@ -1,3 +1,4 @@
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::prelude::*;
 use chumsky::text;
 
@@ -148,36 +149,34 @@ fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .separated_by(just(','));
 
         let atom =
-            choice::<_, Simple<char>>([
-                number.boxed(),
+            choice::<_, Simple<char>>((
+                number,
 
                 text::keyword("type")
+                    .padded()
                     .then(ident.clone()
-                        .delimited_by(just('('), just(')')))
+                        .delimited_by(just('('), just(')'))
+                        .labelled("type() builtin"))
                     .map(|(_, ident)| Expr::TypeOf(ident))
-                    .labelled("type() builtin")
-                    .boxed(),
+                    .labelled("type() builtin"),
 
                 expr.clone()
-                    .delimited_by(just('('), just(')'))
-                    .boxed(),
+                    .delimited_by(just('('), just(')')),
 
                 inner_list.clone()
                     .delimited_by(just('['), just(']'))
                     .map(|v| Expr::Array(v))
-                    .labelled("array initialization")
-                    .boxed(),
+                    .labelled("array initialization"),
 
                 ident.clone()
                     .padded()
                     .then(initializer_list
                         .delimited_by(just('{'), just('}')))
                     .map(|(name,init)| Expr::Struct(name, init))
-                    .labelled("struct initialization")
-                    .boxed(),
+                    .labelled("struct initialization"),
 
-                var.boxed(),
-            ]).padded();
+                var,
+            )).padded();
 
         let op = |c| just(c).padded();
 
@@ -236,5 +235,17 @@ fn main() {
             std::process::exit(1);
         });
 
-    println!("{:?}", parser().parse_recovery(src));
+    let (ast, errs) = parser().parse_recovery(src.trim());
+    println!("{:#?}", ast);
+    errs.into_iter().for_each(|e| {
+        Report::build(ReportKind::Error, (), e.span().start)
+            .with_message(e.to_string())
+            .with_label(Label::new(e.span())
+                    .with_message(e.label().unwrap_or("Parsing error occurred!"))
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .print(Source::from(&src))
+            .unwrap();
+    });
 }

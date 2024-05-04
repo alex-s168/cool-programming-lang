@@ -97,7 +97,20 @@ pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         .map(|v| Token::Number(BigDecimal::from_f64(v).unwrap()))
         .labelled("number");
 
-    let string = filter(|c| *c != '"')
+    let char = just('\\')
+        .then(choice([
+                just('n').to('\n'),
+                just('"').to('"'),
+                just('t').to('\t'),
+                just('0').to('\0'),
+                just('\\').to('\\'),
+            ])
+            .recover_with(skip_parser(any())))
+        .map(|(_,b)| b)
+        .labelled("escape sequence")
+        .or(filter(|c| !['"', '\\'].contains(c)));
+
+    let string = char
         .repeated()
         .collect()
         .map(|str: String| Token::String(str))

@@ -140,40 +140,37 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             })
             .separated_by(just(Token::Comma));
 
-        let atom = annoying1!(Token::Error)
-            .repeated()
-            .then(choice::<_, Simple<Token>>((
-                tok_num.map(|num| Expr::Num(num.to_f64().unwrap())),
+        let atom = choice::<_, Simple<Token>>((
+            tok_num.map(|num| Expr::Num(num.to_f64().unwrap())),
 
-                tok_str.map(|v| Expr::String(v)),
+            tok_str.map(|v| Expr::String(v)),
 
-                annoying1!(Token::KWType)
-                    .then(ident.clone()
-                        .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
-                        .labelled("type() builtin"))
-                    .map(|(_, ident)| Expr::TypeOf(ident))
-                    .labelled("type() builtin")
-                    .recover_with(nested_delimiters(Token::ParenOpen, Token::ParenClose, [], |_| Expr::Err)),
+            annoying1!(Token::KWType)
+                .then(ident.clone()
+                    .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
+                    .labelled("type() builtin"))
+                .map(|(_, ident)| Expr::TypeOf(ident))
+                .labelled("type() builtin")
+                .recover_with(nested_delimiters(Token::ParenOpen, Token::ParenClose, [], |_| Expr::Err)),
 
-                expr.clone()
-                    .delimited_by(just(Token::ParenOpen), just(Token::ParenClose)),
+            expr.clone()
+                .delimited_by(just(Token::ParenOpen), just(Token::ParenClose)),
 
-                inner_list.clone()
-                    .delimited_by(just(Token::SquareOpen), just(Token::SquareClose))
-                    .map(|v| Expr::Array(v))
-                    .labelled("array initialization")
-                    .recover_with(nested_delimiters(Token::SquareOpen, Token::SquareClose, [], |_| Expr::Err)),
+            inner_list.clone()
+                .delimited_by(just(Token::SquareOpen), just(Token::SquareClose))
+                .map(|v| Expr::Array(v))
+                .labelled("array initialization")
+                .recover_with(nested_delimiters(Token::SquareOpen, Token::SquareClose, [], |_| Expr::Err)),
 
-                ident.clone()
-                    .then(initializer_list
-                        .delimited_by(just(Token::CurlyOpen), just(Token::CurlyClose)))
-                    .map(|(name,init)| Expr::Struct(name, init))
-                    .labelled("struct initialization")
-                    .recover_with(nested_delimiters(Token::CurlyOpen, Token::CurlyClose, [], |_| Expr::Err)),
+            ident.clone()
+                .then(initializer_list
+                    .delimited_by(just(Token::CurlyOpen), just(Token::CurlyClose)))
+                .map(|(name,init)| Expr::Struct(name, init))
+                .labelled("struct initialization")
+                .recover_with(nested_delimiters(Token::CurlyOpen, Token::CurlyClose, [], |_| Expr::Err)),
 
-                var,
-            )))
-            .map(|(_, v)| v);
+            var,
+        ));
 
         let member_ref = atom
             .then(annoying1!(Token::Dot)

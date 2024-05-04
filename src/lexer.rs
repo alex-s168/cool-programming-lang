@@ -151,5 +151,8 @@ pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         just('-').to(Token::Minus),
         just('*').to(Token::Mul),
         just('/').to(Token::Div),
-    )).padded().repeated().then_ignore(end())
+    )).recover_with(skip_parser(any().map(|_| Token::Error)))
+        .padded()
+        .repeated()
+        .then_ignore(end())
 }

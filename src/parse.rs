@@ -1,5 +1,6 @@
-use bigdecimal::ToPrimitive;
+use bigdecimal::Num;
 use chumsky::prelude::*;
+
 use crate::lexer::Token;
 
 #[derive(Debug)]
@@ -38,7 +39,7 @@ pub type Initializer = Vec<InitializerSegment>;
 #[derive(Debug)]
 pub enum Expr {
     Err,
-    
+
     Num(f64),
     Var(Ident),
     Array(Arr),
@@ -84,6 +85,15 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
         };
     }
 
+    macro_rules! annoying2 {
+        ($ty:path) => {
+            filter(|tk: &Token| matches!(tk, $ty(_,_)))
+                .map(|tk| {
+                    match tk { $ty(a, b) => (a,b), _ => panic!() }
+                })
+        };
+    }
+
     macro_rules! annoying1 {
         ($ty:path) => {
             filter(|tk: &Token| match tk { $ty => true, _ => false })
@@ -92,8 +102,31 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
     }
 
     let tok_ident = annoying0!(Token::Ident);
-    let tok_num = annoying0!(Token::Number);
+    let tok_num = annoying2!(Token::Number);
     let tok_str = annoying0!(Token::String);
+
+    fn padded<'a, O: 'a, P: 'a>(parser: P) -> BoxedParser<'a, Token, O, Simple<Token>>
+        where P: Parser<Token, O, Error = Simple<Token>> + Clone
+    {
+        let tok_err = annoying0!(Token::Error);
+        let tok_multi = annoying0!(Token::MultiComment);
+        let tok_single = annoying0!(Token::SingleComment);
+        let padding = annoying0!(Token::Padding);
+
+        let errs = choice([
+                tok_err.ignored().boxed(),
+                tok_multi.ignored().boxed(),
+                tok_single.ignored().boxed(),
+                padding.ignored().boxed(),
+        ]).repeated();
+            
+        errs.clone()
+            .then_with::<_, P, _>(move |_| parser.clone())
+            .then_ignore(errs.clone())
+            .boxed()
+    }
+
+    let just = |tk: Token| padded(just(tk));
 
     let ident: Recursive<Token, Ident, _> = recursive(|ident|
         tok_ident
@@ -141,11 +174,13 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .separated_by(just(Token::Comma));
 
         let atom = choice::<_, Simple<Token>>((
-            tok_num.map(|num| Expr::Num(num.to_f64().unwrap())),
+            tok_num.map(|(s,b)| Expr::Num(
+                f64::from_str_radix(s.as_str(), b.radix as u32).unwrap()
+            )),
 
             tok_str.map(|v| Expr::String(v)),
 
-            annoying1!(Token::KWType)
+            padded(annoying1!(Token::KWType))
                 .then(ident.clone()
                     .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
                     .labelled("type() builtin"))
@@ -173,7 +208,7 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
         ));
 
         let member_ref = atom
-            .then(annoying1!(Token::Dot)
+            .then(padded(annoying1!(Token::Dot))
                 .then(tok_ident)
                 .labelled("member access")
                 .repeated())
@@ -194,22 +229,22 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
                 .repeated())
             .foldl(|a, args| Expr::Call(Box::new(a), args));
 
-        let unary = annoying1!(Token::Minus).to(Expr::Neg as fn(_) -> _)
-            .or(annoying1!(Token::Ref).to(Expr::Ref as fn(_) -> _))
+        let unary = padded(annoying1!(Token::Minus)).to(Expr::Neg as fn(_) -> _)
+            .or(padded(annoying1!(Token::Ref)).to(Expr::Ref as fn(_) -> _))
             .repeated()
             .then(call)
             .foldr(|op, old| op(Box::new(old)));
 
         let product = unary.clone()
-            .then(annoying1!(Token::Mul).to(Expr::Mul as fn(_, _) -> _)
-                .or(annoying1!(Token::Div).to(Expr::Div as fn(_, _) -> _))
+            .then(padded(annoying1!(Token::Mul)).to(Expr::Mul as fn(_, _) -> _)
+                .or(padded(annoying1!(Token::Div)).to(Expr::Div as fn(_, _) -> _))
                 .then(unary)
                 .repeated())
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
 
         let sum = product.clone()
-            .then(annoying1!(Token::Plus).to(Expr::Add as fn(_, _) -> _)
-                .or(annoying1!(Token::Minus).to(Expr::Sub as fn(_, _) -> _))
+            .then(padded(annoying1!(Token::Plus)).to(Expr::Add as fn(_, _) -> _)
+                .or(padded(annoying1!(Token::Minus)).to(Expr::Sub as fn(_, _) -> _))
                 .then(product)
                 .repeated())
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
@@ -217,5 +252,5 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
         sum
     });
 
-    expr.then_ignore(end())
+    padded(expr).then_ignore(end())
 }

@@ -1,17 +1,19 @@
 use core::fmt;
 use std::hash::Hash;
-use bigdecimal::{BigDecimal, FromPrimitive};
 use chumsky::prelude::*;
 use chumsky::text;
 
 #[derive(Debug, Clone, Eq, PartialOrd, PartialEq, Hash)]
 pub enum Token {
-    Error,
-    Comment,
+    Error(/* source that errored */ char),
+    MultiComment(String),
+    SingleComment(String),
+    Padding(/* source */ char),
 
-    Number(BigDecimal),
+    Number(String, Base),
     String(String),
     Ident(String),
+    
     ParenOpen,
     ParenClose,
     CurlyOpen,
@@ -35,6 +37,64 @@ pub enum Token {
     KWType,
 }
 
+impl Token {
+    pub fn get_source_str(self, dest: &mut String) {
+        match self {
+            Token::Error(c) => dest.push(c),
+            Token::MultiComment(s) => {
+                dest.push_str("/*");
+                dest.push_str(s.as_str());
+                dest.push_str("*/");
+            }
+            Token::SingleComment(s) => {
+                dest.push_str("//");
+                dest.push_str(s.as_str());
+            }
+            Token::Padding(c) => {
+                dest.push(c);
+            }
+            
+            Token::Number(s, base) => {
+                match base {
+                    Base::DEC => {}
+                    Base::HEX => dest.push_str("0x"),
+                    Base::OCT => dest.push_str("0o"),
+                    Base::BIN => dest.push_str("0b"),
+                    _ => panic!()
+                }
+                dest.push_str(s.as_str());
+            }
+            Token::String(s) => {
+                dest.push('"');
+                dest.push_str(s.as_str());
+                dest.push('"')
+            }
+            Token::Ident(s) => dest.push_str(s.as_str()),
+
+            Token::ParenOpen => dest.push('('),
+            Token::ParenClose => dest.push(')'),
+            Token::CurlyOpen => dest.push('{'),
+            Token::CurlyClose => dest.push('}'),
+            Token::SquareOpen => dest.push('['),
+            Token::SquareClose => dest.push(']'),
+            Token::AngleOpen => dest.push('<'),
+            Token::AngleClose => dest.push('>'),
+            Token::Comma => dest.push(','),
+            Token::UnrollDots => dest.push_str(".."),
+            Token::Dot => dest.push('.'),
+            Token::NamespaceColons => dest.push_str("::"),
+            Token::Colon => dest.push(':'),
+
+            Token::Ref => dest.push('&'),
+            Token::Minus => dest.push('-'),
+            Token::Plus => dest.push('+'),
+            Token::Mul => dest.push('*'),
+            Token::Div => dest.push('/'),
+
+            Token::KWType => dest.push_str("type"),
+        }
+    }
+}
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -42,16 +102,16 @@ impl fmt::Display for Token {
     }
 }
 
-#[derive(Copy,Clone)]
-struct Base {
-    radix: u8
+#[derive(Debug, Copy, Clone, Eq, PartialOrd, PartialEq, Hash)]
+pub struct Base {
+    pub radix: u8
 }
 
 impl Base {
-    const HEX: Base = Base { radix: 16 };
-    const OCT: Base = Base { radix: 8 };
-    const BIN: Base = Base { radix: 2 };
-    const DEC: Base = Base { radix: 10 };
+    pub const HEX: Base = Base { radix: 16 };
+    pub const OCT: Base = Base { radix: 8 };
+    pub const BIN: Base = Base { radix: 2 };
+    pub const DEC: Base = Base { radix: 10 };
 }
 
 pub const SIMPLE_TOKENS: [char; 16] = [
@@ -70,32 +130,26 @@ pub const SIMPLE_TOKENS: [char; 16] = [
 ];
 
 pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
-    let int_semi = |radix| text::digits(radix)
-        .separated_by(just("_"))
-        .at_least(1)
-        .map(|s: Vec<String>| s.join(""));
-
     let int =
         choice::<_, Simple<char>>([
             just("0x").to(Base::HEX),
             just("0b").to(Base::BIN),
-            just("0o").to(Base::OCT),])
-            .then_with(move |base: Base| int_semi(base.radix as u32)
-                .map(move |s: String| u64::from_str_radix(s.as_str(), base.radix as u32).unwrap() as f64)
-            )
-            .labelled("int");
+            just("0o").to(Base::OCT),
+        ])
+        .then_with(move |base: Base| text::digits(base.radix as u32)
+            .map(move |s: String| Token::Number(s, base))
+        )
+        .labelled("int");
 
-    let float = int_semi(10)
+    let float = text::digits(10)
         .separated_by(just('.'))
         .at_least(1)
         .at_most(2)
         .map(|s: Vec<String>| s.join("."))
-        .map(|s: String| s.parse().unwrap())
+        .map(|s: String| Token::Number(s, Base::DEC))
         .labelled("float");
 
     let number = int.or(float)
-        .padded()
-        .map(|v| Token::Number(BigDecimal::from_f64(v).unwrap()))
         .labelled("number");
 
     let char = just('\\')
@@ -130,14 +184,16 @@ pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     let single_comment = text::newline()
         .not()
         .repeated()
+        .collect()
         .delimited_by(just("//"), text::newline().or(end().rewind()))
-        .map(|_| Token::Comment)
+        .map(|txt: String| Token::SingleComment(txt))
         .labelled("comment");
     
     let multi_comment = none_of("*/")
         .repeated()
+        .collect()
         .delimited_by(just("/*"), just("*/"))
-        .map(|_| Token::Comment)
+        .map(|txt: String| Token::MultiComment(txt))
         .labelled("comment");
     
     choice((
@@ -166,8 +222,9 @@ pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         just('-').to(Token::Minus),
         just('*').to(Token::Mul),
         just('/').to(Token::Div),
-    )).recover_with(skip_parser(any().map(|_| Token::Error)))
-        .padded()
+        
+        one_of(['\n','\t','\r',' ']).map(|c| Token::Padding(c)),
+    )).recover_with(skip_parser(any().map(|c| Token::Error(c))))
         .repeated()
         .then_ignore(end())
 }

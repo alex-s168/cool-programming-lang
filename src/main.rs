@@ -3,7 +3,6 @@ mod lexer;
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::prelude::*;
-use crate::lexer::Token;
 
 fn main() {
     let src = std::env::args().nth(1)
@@ -28,11 +27,9 @@ fn main() {
 
     println!("{:?}", tokens);
 
-    let mut tokens = tokens.unwrap_or_else(|| {
+    let tokens = tokens.unwrap_or_else(|| {
         std::process::exit(1);
     });
-
-    tokens.retain(|tk| ![Token::Error, Token::Comment].contains(tk));
 
     let (ast, errs1) = parse::parser().parse_recovery(tokens);
 

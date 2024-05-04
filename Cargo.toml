@@ -4,9 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ariadne = "0.4.1"
 bigdecimal = "0.4.3"
 chumsky = "0.9.3"
 line-span = "0.1.5"
-sum_type = "0.2.0"
 termcolor = "1.4.1"

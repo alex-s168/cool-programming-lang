@@ -1,5 +1,6 @@
 use core::fmt;
 use std::hash::Hash;
+use std::ops::Range;
 use chumsky::error::Cheap;
 use chumsky::prelude::*;
 use chumsky::text;
@@ -134,6 +135,49 @@ pub fn nth_line(tokens: &[Token], want: usize) -> NthLine {
         off_up_from_wanted: 0,
         tokens: res,
     }
+}
+
+pub fn line_at(tokens: &[Token], index: usize) -> Range<usize> {
+    let mut start = index;
+    loop {
+        if start == 0 {
+            break
+        }
+        let off = tokens[start - 1].clone().count_lines_off();
+        if off > 0 {
+            break
+        }
+        start -= 1;
+    }
+
+    let mut end = index;
+    loop {
+        if end >= tokens.len() {
+            break
+        }
+        let off = tokens[end].clone().count_lines_off();
+        if off > 0 {
+            end += 1;
+            break
+        }
+        end += 1;
+    }
+
+    Range { start, end }
+}
+
+pub fn line_index(tokens: &[Token], index: usize) -> usize {
+    let mut sum = 0;
+    let mut index = index;
+    loop {
+        sum += tokens[index].clone().count_lines_off();
+        if index == 0 {
+            break
+        }
+        index -= 1;
+    }
+    
+    sum
 }
 
 pub fn get_source_str(tokens: &[Token]) -> String {

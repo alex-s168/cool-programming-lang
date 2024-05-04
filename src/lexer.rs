@@ -7,6 +7,7 @@ use chumsky::text;
 #[derive(Debug, Clone, Eq, PartialOrd, PartialEq, Hash)]
 pub enum Token {
     Error,
+    Comment,
 
     Number(BigDecimal),
     String(String),
@@ -126,9 +127,23 @@ pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
                 .map(|(_, v)| v)))
         .labelled("string");
 
+    let single_comment = text::newline()
+        .not()
+        .repeated()
+        .delimited_by(just("//"), text::newline().or(end().rewind()))
+        .map(|_| Token::Comment)
+        .labelled("comment");
+    
+    let multi_comment = none_of("*/")
+        .repeated()
+        .delimited_by(just("/*"), just("*/"))
+        .map(|_| Token::Comment)
+        .labelled("comment");
+    
     choice((
+        single_comment,
+        multi_comment,
         text::keyword("type").to(Token::KWType),
-
         string,
         number,
         text::ident().map(|v| Token::Ident(v)),

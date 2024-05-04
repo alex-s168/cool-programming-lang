@@ -32,7 +32,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    tokens.retain(|tk| *tk != Token::Error);
+    tokens.retain(|tk| ![Token::Error, Token::Comment].contains(tk));
 
     let (ast, errs1) = parse::parser().parse_recovery(tokens);
 

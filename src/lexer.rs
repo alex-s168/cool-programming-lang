@@ -1,5 +1,6 @@
 use core::fmt;
 use std::hash::Hash;
+use chumsky::error::Cheap;
 use chumsky::prelude::*;
 use chumsky::text;
 
@@ -38,6 +39,15 @@ pub enum Token {
 }
 
 impl Token {
+    pub fn count_lines_off(self) -> usize {
+        match self {
+            Token::MultiComment(s) => s.chars().into_iter().filter(|c| *c == '\n').count(),
+            Token::Padding(s) => if s == '\n' { 1 } else { 0 },
+            Token::String(s) => s.chars().into_iter().filter(|c| *c == '\n').count(),
+            _ => 0
+        }
+    }
+
     pub fn get_source_str(self, dest: &mut String) {
         match self {
             Token::Error(c) => dest.push(c),
@@ -96,6 +106,36 @@ impl Token {
     }
 }
 
+pub struct NthLine {
+    pub off_up_from_wanted: usize,
+    pub tokens: Vec<Token>
+}
+
+pub fn nth_line(tokens: &[Token], want: usize) -> NthLine {
+    let mut res = Vec::new();
+
+    let mut curr = 0;
+
+    for token in tokens {
+        let off = token.clone().count_lines_off();
+        if curr == want && curr + off == want {
+            res.push(token.clone())
+        } else if curr == want && curr + off > want {
+            res.push(token.clone());
+            return NthLine {
+                off_up_from_wanted: curr + off - want,
+                tokens: res,
+            };
+        }
+        curr += off;
+    }
+
+    NthLine {
+        off_up_from_wanted: 0,
+        tokens: res,
+    }
+}
+
 pub fn get_source_str(tokens: &[Token]) -> String {
     let mut buf = String::new();
     for tok in tokens {
@@ -137,9 +177,9 @@ pub const SIMPLE_TOKENS: [char; 16] = [
     '/',
 ];
 
-pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
+pub fn parser() -> impl Parser<char, Vec<Token>, Error = Cheap<char>> {
     let int =
-        choice::<_, Simple<char>>([
+        choice::<_, Cheap<char>>([
             just("0x").to(Base::HEX),
             just("0b").to(Base::BIN),
             just("0o").to(Base::OCT),

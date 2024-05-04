@@ -1,4 +1,5 @@
 use bigdecimal::Num;
+use chumsky::error::Cheap;
 use chumsky::prelude::*;
 
 use crate::lexer::Token;
@@ -75,7 +76,7 @@ impl Base {
     const DEC: Base = Base { radix: 10 };
 }
 
-pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
+pub fn parser() -> impl Parser<Token, Expr, Error = Cheap<Token>> {
     macro_rules! annoying0 {
         ($ty:path) => {
             filter(|tk: &Token| matches!(tk, $ty(_)))
@@ -105,8 +106,8 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
     let tok_num = annoying2!(Token::Number);
     let tok_str = annoying0!(Token::String);
 
-    fn padded<'a, O: 'a, P: 'a>(parser: P) -> BoxedParser<'a, Token, O, Simple<Token>>
-        where P: Parser<Token, O, Error = Simple<Token>> + Clone
+    fn padded<'a, O: 'a, P: 'a>(parser: P) -> BoxedParser<'a, Token, O, Cheap<Token>>
+        where P: Parser<Token, O, Error = Cheap<Token>> + Clone
     {
         let tok_err = annoying0!(Token::Error);
         let tok_multi = annoying0!(Token::MultiComment);
@@ -173,7 +174,7 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             })
             .separated_by(just(Token::Comma));
 
-        let atom = choice::<_, Simple<Token>>((
+        let atom = choice::<_, Cheap<Token>>((
             tok_num.map(|(s,b)| Expr::Num(
                 f64::from_str_radix(s.as_str(), b.radix as u32).unwrap()
             )),

@@ -3,6 +3,8 @@ mod lexer;
 
 use chumsky::prelude::*;
 use std::io::{self, Write};
+use chumsky::error::Cheap;
+use line_span::LineSpanExt;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 fn print_tokens(tokens: &[lexer::Token]) -> io::Result<()> {
@@ -30,6 +32,28 @@ fn print_tokens(tokens: &[lexer::Token]) -> io::Result<()> {
     stdout.flush()
 }
 
+fn print_err_lexer(err: Cheap<char>, src: &String, tokens: &[lexer::Token]) {
+    src.line_spans()
+        .enumerate()
+        .find(|(_,span)| err.span().start >= span.range().start && err.span().start <= span.range().end)
+        .map(|(id,_)| {
+            let tk = lexer::nth_line(tokens, id).tokens;
+            let msg = err.label().map_or_else(
+                || format!("In line {}:", id + 1),
+                |label| format!("In line {}: {}", id + 1, label),
+            );
+            let mut stdout = StandardStream::stdout(ColorChoice::Always);
+            stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
+            writeln!(&mut stdout, "{}", msg.as_str())?;
+            print_tokens(tk.as_slice())?;
+            writeln!(&mut stdout)
+        });
+}
+
+fn print_err_parser(err: Cheap<lexer::Token>, tokens: &[lexer::Token]) {
+    
+}
+
 fn main() {
     let src = std::env::args().nth(1)
         .and_then(|it| std::fs::read_to_string(it).ok())
@@ -39,18 +63,18 @@ fn main() {
         });
 
     let (tokens, errs0) = lexer::parser().parse_recovery(src.as_str());
-
     let tokens = tokens.unwrap_or_else(|| {
+        eprintln!("Fatal lexer error!");
         std::process::exit(1);
     });
-
-    print_tokens(tokens.as_slice()).unwrap();
-/*
-    println!("{}", lexer::get_source_str(tokens.as_slice()));
-
-    let (ast, errs1) = parse::parser().parse_recovery(tokens);
+    for err in errs0 {
+        print_err_lexer(err, &src, tokens.as_slice());
+    }
+    
+    let (ast, errs1) = parse::parser().parse_recovery(tokens.as_slice());
+    for err in errs1 {
+        print_err_parser(err, tokens.as_slice());
+    }
 
     println!("{:#?}", ast);
-
- */
 }

@@ -5,66 +5,116 @@ use std::error::Error;
 use chumsky::prelude::*;
 use std::io::{self, Write};
 use std::ops::{Index, Range};
-use std::ptr::write;
 use chumsky::error::Cheap;
 use line_span::LineSpanExt;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+use crate::lexer::Token;
 
-fn simple_color_lut(tok: &lexer::Token) -> Color {
+fn simple_color_lut(tok: &Token) -> Color {
     match tok {
-        lexer::Token::String(_) => Color::Rgb(60, 138, 58),
-        lexer::Token::Number(_, _) => Color::Rgb(0, 105, 204),
-        lexer::Token::Ident(_) => Color::Rgb(152, 177, 184),
-        lexer::Token::MultiComment(_) => Color::Rgb(97, 97, 97),
-        lexer::Token::SingleComment(_) => Color::Rgb(97, 97, 97),
-        lexer::Token::Error(_) => Color::Rgb(255, 0, 0),
-        lexer::Token::KWType => Color::Rgb(179, 62, 0),
+        Token::String(_) => Color::Rgb(60, 138, 58),
+        Token::Number(_, _) => Color::Rgb(0, 105, 204),
+        Token::Ident(_) => Color::Rgb(152, 177, 184),
+        Token::MultiComment(_) => Color::Rgb(97, 97, 97),
+        Token::SingleComment(_) => Color::Rgb(97, 97, 97),
+        Token::Error(_) => Color::Rgb(255, 0, 0),
+        Token::KWType => Color::Rgb(179, 62, 0),
         _ => Color::White
     }
 }
 
-fn print_tokens<F>(tokens: &[lexer::Token], lut: F) -> io::Result<()>
-    where F: Fn(&lexer::Token) -> Color
-{
-    let mut stdout = StandardStream::stdout(ColorChoice::Always);
-
-    for tok in tokens {
-        let color = lut(tok);
-        stdout.set_color(ColorSpec::new().set_fg(Some(color)))?;
-
-        let mut str = String::new();
-        tok.clone().get_source_str(&mut str);
-        write!(&mut stdout, "{}", str.as_str())?;
-    }
-
-    stdout.flush()?;
-    stdout.reset()
+#[derive(Clone)]
+struct TokenPrintConfig {
+    colorscheme: fn(&Token) -> Color,
+    at_most_lines: Option<usize>,
+    highlight: Option<(Range<usize>, Color)>,
+    highlight_auto: Option<fn(&Token) -> Option<Color>>,
+    no_break: bool,
 }
 
-fn print_tokens_at_most_lines<F>(tokens: &[lexer::Token], lut: F, lines: usize) -> io::Result<()>
-    where F: Fn(&lexer::Token) -> Color
+impl TokenPrintConfig {
+    fn new() -> TokenPrintConfig {
+        TokenPrintConfig {
+            colorscheme: simple_color_lut,
+            at_most_lines: None,
+            highlight: None,
+            no_break: false,
+            highlight_auto: None,
+        }
+    }
+
+    fn with_colors(&mut self, scheme: fn(&Token) -> Color) -> &mut TokenPrintConfig {
+        self.colorscheme = scheme;
+        self
+    }
+
+    fn with_line_limit(&mut self, limit: usize) -> &mut TokenPrintConfig {
+        self.at_most_lines = Some(limit);
+        self
+    }
+
+    fn with_highlight(&mut self, range: Range<usize>, color: Color) -> &mut TokenPrintConfig {
+        self.highlight = Some((range, color));
+        self
+    }
+    
+    fn with_highlight_fn(&mut self, f: fn(&Token) -> Option<Color>) -> &mut TokenPrintConfig {
+        self.highlight_auto = Some(f);
+        self
+    }
+
+    fn without_breaks(&mut self) -> &mut TokenPrintConfig {
+        self.no_break = true;
+        self
+    }
+}
+
+fn print_tokens(tokens: &[lexer::Token], config: &TokenPrintConfig) -> io::Result<()>
 {
     let mut stdout = StandardStream::stdout(ColorChoice::Always);
     let mut line: usize =  0;
 
-    for tok in tokens {
+    for (id, tok) in tokens.iter().enumerate() {
         let off = tok.clone().count_lines_off();
 
-        let color = lut(tok);
-        stdout.set_color(ColorSpec::new().set_fg(Some(color)))?;
+        let color = (config.colorscheme)(tok);
 
         let mut str = String::new();
         tok.clone().get_source_str(&mut str);
+        if config.no_break {
+            str.retain(|v| v != '\n');
+        }
         let mut strstr = str.as_str();
-        if line + off >= lines {
-            let nl = str.find('\n').unwrap();
-            strstr = str.index(Range { start: 0, end: nl });
+        if config.at_most_lines.is_some() {
+            if line + off >= config.at_most_lines.unwrap() {
+                let nl = str.find('\n').unwrap();
+                strstr = str.index(Range { start: 0, end: nl });
+            }
+        }
+        if config.highlight.is_some() {
+            let (hl,col) = config.highlight.as_ref().unwrap();
+            if id >= hl.start && id < hl.end {
+                stdout.set_color(ColorSpec::new()
+                    .set_fg(Some(color))
+                    .set_bg(Some(*col)))?;
+            } else {
+                stdout.set_color(ColorSpec::new()
+                    .set_fg(Some(color)))?;
+            }
+        }
+        else {
+            stdout.set_color(ColorSpec::new()
+                .set_fg(Some(color))
+                .set_bg(config.highlight_auto
+                    .and_then(|f| f(tok))))?;
         }
         write!(&mut stdout, "{}", strstr)?;
 
-        line += off;
-        if line >= lines {
-            break
+        if config.at_most_lines.is_some() {
+            line += off;
+            if line >= config.at_most_lines.unwrap() {
+                break
+            }
         }
     }
 
@@ -89,29 +139,34 @@ macro_rules! errdef {
 
 errdef!(BrokenParserError, "Returned parser index range broken");
 
-fn print_err_lexer(err: Cheap<char>, src: &String, tokens: &[lexer::Token]) -> Result<(), Box<dyn Error>> {
+fn print_err_lexer(err: Cheap<char>, src: &String, tokens: &[Token]) -> Result<(), Box<dyn Error>> {
     let (id, _) = src.line_spans()
         .enumerate()
-        .find(|(_,span)| err.span().start >= span.range().start && err.span().start <= span.range().end)
+        .find(|(_,span)| err.span().start >= span.range().start && err.span().start < span.range().end)
         .ok_or(BrokenParserError {})?;
 
     let tk = lexer::nth_line(tokens, id).tokens;
     let msg = err.label().map_or_else(
-        || format!("In line {}:", id + 1),
+        || format!("In line {}: Unexpected", id + 1),
         |label| format!("In line {}: {}", id + 1, label),
     );
     let mut stdout = StandardStream::stdout(ColorChoice::Always);
     stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
     writeln!(&mut stdout, "{}", msg.as_str())?;
     write!(&mut stdout, "  ")?;
-    print_tokens_at_most_lines(tk.as_slice(), simple_color_lut, 1)?;
+    print_tokens(tk.as_slice(), TokenPrintConfig::new()
+        .with_line_limit(1)
+        .with_highlight_fn(|f| match f {
+            Token::Error(_) => Some(Color::Red),
+            _ => None
+        }))?;
     stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
     writeln!(&mut stdout, "\n")?;
     stdout.reset()?;
     Ok(())
 }
 
-fn print_err_parser(err: Simple<lexer::Token>, tokens: &[lexer::Token]) -> Result<(), Box<dyn Error>> {
+fn print_err_parser(err: Simple<Token>, tokens: &[Token]) -> Result<(), Box<dyn Error>> {
     let line = lexer::line_at(tokens, err.span().start);
     let tk = tokens.get(line).ok_or(BrokenParserError {})?;
     let line_id = lexer::line_index(tokens, err.span().start);
@@ -130,7 +185,8 @@ fn print_err_parser(err: Simple<lexer::Token>, tokens: &[lexer::Token]) -> Resul
                 continue
             }
             let x = x.as_ref().unwrap();
-            print_tokens([x.clone()].as_slice(), simple_color_lut)?;
+            print_tokens([x.clone()].as_slice(), TokenPrintConfig::new()
+                .without_breaks())?;
             stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
             write!(&mut stdout, " ")?;
         }
@@ -139,12 +195,15 @@ fn print_err_parser(err: Simple<lexer::Token>, tokens: &[lexer::Token]) -> Resul
     if err.found().is_some() {
         write!(&mut stdout, "Found: ")?;
         let found = err.found().unwrap();
-        print_tokens([found.clone()].as_slice(), simple_color_lut)?;
+        print_tokens([found.clone()].as_slice(), TokenPrintConfig::new()
+            .without_breaks())?;
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
         writeln!(&mut stdout)?;
     }
     write!(&mut stdout, "  ")?;
-    print_tokens_at_most_lines(tk, simple_color_lut, 1)?;
+    print_tokens(tk, TokenPrintConfig::new()
+        .with_line_limit(1)
+        .with_highlight(err.span(), Color::Red))?;
     stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
     writeln!(&mut stdout, "\n")?;
     stdout.reset()?;

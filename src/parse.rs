@@ -1,7 +1,5 @@
 use bigdecimal::ToPrimitive;
 use chumsky::prelude::*;
-use chumsky::text;
-use crate::lexer;
 use crate::lexer::Token;
 
 #[derive(Debug)]
@@ -39,10 +37,13 @@ pub type Initializer = Vec<InitializerSegment>;
 
 #[derive(Debug)]
 pub enum Expr {
+    Err,
+    
     Num(f64),
     Var(Ident),
     Array(Arr),
     Struct(Ident, Initializer),
+    String(String),
 
     MemberRef(Box<Expr>, String),
     ArrIndex {
@@ -92,6 +93,7 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
 
     let tok_ident = annoying0!(Token::Ident);
     let tok_num = annoying0!(Token::Number);
+    let tok_str = annoying0!(Token::String);
 
     let ident: Recursive<Token, Ident, _> = recursive(|ident|
         tok_ident
@@ -138,16 +140,20 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             })
             .separated_by(just(Token::Comma));
 
-        let atom =
-            choice::<_, Simple<Token>>((
+        let atom = annoying1!(Token::Error)
+            .repeated()
+            .then(choice::<_, Simple<Token>>((
                 tok_num.map(|num| Expr::Num(num.to_f64().unwrap())),
+
+                tok_str.map(|v| Expr::String(v)),
 
                 annoying1!(Token::KWType)
                     .then(ident.clone()
                         .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
                         .labelled("type() builtin"))
                     .map(|(_, ident)| Expr::TypeOf(ident))
-                    .labelled("type() builtin"),
+                    .labelled("type() builtin")
+                    .recover_with(nested_delimiters(Token::ParenOpen, Token::ParenClose, [], |_| Expr::Err)),
 
                 expr.clone()
                     .delimited_by(just(Token::ParenOpen), just(Token::ParenClose)),
@@ -155,16 +161,19 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
                 inner_list.clone()
                     .delimited_by(just(Token::SquareOpen), just(Token::SquareClose))
                     .map(|v| Expr::Array(v))
-                    .labelled("array initialization"),
+                    .labelled("array initialization")
+                    .recover_with(nested_delimiters(Token::SquareOpen, Token::SquareClose, [], |_| Expr::Err)),
 
                 ident.clone()
                     .then(initializer_list
                         .delimited_by(just(Token::CurlyOpen), just(Token::CurlyClose)))
                     .map(|(name,init)| Expr::Struct(name, init))
-                    .labelled("struct initialization"),
+                    .labelled("struct initialization")
+                    .recover_with(nested_delimiters(Token::CurlyOpen, Token::CurlyClose, [], |_| Expr::Err)),
 
                 var,
-            ));
+            )))
+            .map(|(_, v)| v);
 
         let member_ref = atom
             .then(annoying1!(Token::Dot)
@@ -184,6 +193,7 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .then(inner_list
                 .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
                 .labelled("function call")
+                .recover_with(nested_delimiters(Token::ParenOpen, Token::ParenClose, [], |_| vec!()))
                 .repeated())
             .foldl(|a, args| Expr::Call(Box::new(a), args));
 

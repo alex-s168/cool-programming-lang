@@ -17,13 +17,15 @@ fn main() {
         Report::build(ReportKind::Error, (), e.span().start)
             .with_message(e.to_string())
             .with_label(Label::new(e.span())
-                            .with_message(e.label().unwrap_or("Parsing error occurred!"))
+                            .with_message(e.label().unwrap_or("Lexing error occurred!"))
                             .with_color(Color::Red),
             )
             .finish()
             .print(Source::from(&src))
             .unwrap();
     };
+
+    println!("{:?}", tokens);
 
     let (ast, errs1) = parse::parser().parse_recovery(tokens.unwrap_or_else(|| {
         std::process::exit(1);

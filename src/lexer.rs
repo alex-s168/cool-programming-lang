@@ -6,6 +6,8 @@ use chumsky::text;
 
 #[derive(Debug, Clone, Eq, PartialOrd, PartialEq, Hash)]
 pub enum Token {
+    Error,
+
     Number(BigDecimal),
     String(String),
     Ident(String),
@@ -51,6 +53,21 @@ impl Base {
     const DEC: Base = Base { radix: 10 };
 }
 
+pub const SIMPLE_TOKENS: [char; 16] = [
+    '(', ')',
+    '{', '}',
+    '[', ']',
+    '<', '>',
+    ',',
+    '.',
+    ':',
+    '&',
+    '+',
+    '-',
+    '*',
+    '/',
+];
+
 pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     let int_semi = |radix| text::digits(radix)
         .separated_by(just("_"))
@@ -80,15 +97,27 @@ pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         .map(|v| Token::Number(BigDecimal::from_f64(v).unwrap()))
         .labelled("number");
 
-    // TODO: escape sequences
-    let string = any::<_, Simple<char>>()
+    let string = filter(|c| *c != '"')
         .repeated()
+        .collect()
+        .map(|str: String| Token::String(str))
         .delimited_by(just('"'), just('"'))
-        .map(|str| Token::String(String::from_iter(str)));
+        .recover_with(skip_parser(
+            just('"')
+                .then(none_of(SIMPLE_TOKENS)
+                    .repeated()
+                    .collect()
+                    .then_ignore(one_of(SIMPLE_TOKENS)
+                        .rewind())
+                    .map(|str: String| Token::String(str.trim_end().parse().unwrap())))
+                .map(|(_, v)| v)))
+        .labelled("string");
 
     choice((
-        number,
+        text::keyword("type").to(Token::KWType),
+
         string,
+        number,
         text::ident().map(|v| Token::Ident(v)),
         just('(').to(Token::ParenOpen),
         just(')').to(Token::ParenClose),
@@ -109,7 +138,5 @@ pub fn parser() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         just('-').to(Token::Minus),
         just('*').to(Token::Mul),
         just('/').to(Token::Div),
-
-        text::keyword("type").to(Token::KWType),
-    )).padded().repeated()
+    )).padded().repeated().then_ignore(end())
 }

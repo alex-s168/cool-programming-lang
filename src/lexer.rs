@@ -96,6 +96,14 @@ impl Token {
     }
 }
 
+pub fn get_source_str(tokens: &[Token]) -> String {
+    let mut buf = String::new();
+    for tok in tokens {
+        tok.clone().get_source_str(&mut buf)
+    }
+    buf
+}
+
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)

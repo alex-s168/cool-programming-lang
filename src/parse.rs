@@ -119,7 +119,7 @@ pub fn parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
                 tok_single.ignored().boxed(),
                 padding.ignored().boxed(),
         ]).repeated();
-            
+
         errs.clone()
             .then_with::<_, P, _>(move |_| parser.clone())
             .then_ignore(errs.clone())
